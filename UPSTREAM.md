@@ -4,9 +4,9 @@
 
 - Upstream repo: https://github.com/lensfun/lensfun.git
 - Integration mode: git submodule (`third_party/lensfun`)
-- Current pinned commit: `655a9c4e3e53c25bc04843c853e7e7a0121359e7`
-- Commit date: `2026-02-28`
-- Commit subject: `Add tca data for Meike SL 35mm F1.8 STM PRO`
+- Current pinned commit: `698a39eea69be00f4f25b6da6c1ad34b1f162b50`
+- Commit date: `2026-06-13`
+- Commit subject: `Add Sony E 15mm F1.4 G`
 
 ## Update policy
 
