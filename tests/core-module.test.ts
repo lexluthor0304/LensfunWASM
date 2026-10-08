@@ -209,4 +209,17 @@ describe.skipIf(skip)('the built core module', () => {
       client.dispose();
     }
   });
+
+  it('searches every mount when no camera model is given', async () => {
+    const { client } = await startClient();
+    try {
+      // An empty camera model once stood for the first camera of the database.
+      for (const query of [{ lensMaker: 'Canon', lensModel: 'EF 24-105mm f/4L IS USM' },
+        { lensMaker: 'Canon', lensModel: 'EF 24-105mm f/4L IS USM', cameraMaker: 'Canon', cameraModel: '' }]) {
+        expect(client.searchLenses(query).some((lens) => CANON_24_105.model.test(lens.model))).toBe(true);
+      }
+    } finally {
+      client.dispose();
+    }
+  });
 });

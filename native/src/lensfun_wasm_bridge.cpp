@@ -161,7 +161,10 @@ LFW_EXPORT char *lfw_find_lenses_json(
 
     const lfCamera *camera = nullptr;
     const lfCamera **cameras_to_free = nullptr;
-    if (camera_maker || camera_model)
+    // A camera narrows the search to its mount and crop factor, and only a
+    // model names one: for an empty model lf_db_find_cameras returns every
+    // camera (of the maker), and the first of them would stand in for it.
+    if (camera_model && *camera_model)
     {
         cameras_to_free = lf_db_find_cameras(g_db, camera_maker, camera_model);
         if (cameras_to_free)
