@@ -22,7 +22,7 @@
   - 幾何/歪み
   - TCA（倍率色収差）
   - 歪みと TCA の同時補正（チャンネル別の 1 つのマップ、Lensfun の補正順）
-  - 周辺減光（vignetting）
+  - 周辺減光（vignetting。歪みのキャリブレーションがないレンズ向けに単独でも生成可）
 
 出力マップは WebGL/WebGPU/canvas のリマップ処理に利用できます。
 
@@ -167,6 +167,8 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
 
 `tca` は TCA 補正だけで作られるため、座標に歪み補正は含まれません。両方を補正するには `buildSubpixelGeometryMap` を使います。
 
+`geometry` は常に最初に作られるため、歪みのキャリブレーションがないレンズでは失敗します（コード `-4`）。そのようなレンズの周辺減光ゲインは `buildVignettingMap` で作ります。
+
 ### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
 
 歪みと TCA を同時に補正したマップ。Lensfun が 1 ステップで適用する順序（`ApplySubpixelGeometryDistortion`：先に歪み補正、その歪んだ位置で TCA 補正）に従います。
@@ -179,6 +181,20 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
 - `coords: Float32Array` 長さ = `gridW * gridH * 6`
   - 配列レイアウト: `[rx, ry, gx, gy, bx, by, ...]`
 - `modifications`: 適用した補正（`LF_MODIFY_DISTORTION`、`LF_MODIFY_TCA`）。TCA のキャリブレーションがないレンズは 3 チャンネルとも歪み補正のみ、どちらもないレンズは例外（コード `-4`）。
+
+### `buildVignettingMap(input) => VignettingMap`
+
+周辺減光のゲインだけを作り、幾何マップは作りません。同じグリッドで `buildCorrectionMaps` が返す `vignetting` と同じ値です。歪みのキャリブレーションがないレンズにも使えます。
+
+`VignettingMapInput`: `MapGridInput` の各フィールド、`aperture`（必須）、`distance?`（既定 `1000`）
+
+`VignettingMap`:
+
+- `gridWidth`、`gridHeight`、`step`
+- `gains: Float32Array` 長さ = `gridW * gridH * 3`
+  - 配列レイアウト: `[rGain, gGain, bGain, ...]`
+
+そのクロップ係数で周辺減光のキャリブレーションがないレンズは例外（コード `-4`）。
 
 ### `dispose()`
 

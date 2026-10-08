@@ -105,6 +105,19 @@ export interface SubpixelGeometryMap {
   modifications: number;
 }
 
+export interface VignettingMapInput extends MapGridInput {
+  aperture: number;
+  distance?: number;
+}
+
+export interface VignettingMap {
+  gridWidth: number;
+  gridHeight: number;
+  step: number;
+  /** Per grid node, the gains of red, green and blue: [rGain, gGain, bGain, ...]. */
+  gains: Float32Array;
+}
+
 type CFn = (...args: unknown[]) => unknown;
 
 interface NativeFns {
@@ -427,6 +440,44 @@ export class LensfunClient {
       coords: values,
       modifications: rc
     };
+  }
+
+  /**
+   * Vignetting gains alone, without a geometry map: the `vignetting` map of
+   * buildCorrectionMaps with includeVignetting, for the same grid. Use it
+   * for a lens without distortion calibration too: buildCorrectionMaps
+   * builds the geometry map first, which such a lens fails (code -4).
+   * Throws (code -4) when the lens has no vignetting calibration for this
+   * crop factor.
+   */
+  buildVignettingMap(input: VignettingMapInput): VignettingMap {
+    this.ensureAlive();
+
+    const width = requirePositiveInt(input.width, 'width');
+    const height = requirePositiveInt(input.height, 'height');
+    const step = requirePositiveInt(input.step ?? 1, 'step');
+    if (typeof input.aperture !== 'number') {
+      throw new Error('[lensfun-wasm] aperture is required for vignetting map');
+    }
+
+    const gridWidth = toGrid(width, step);
+    const gridHeight = toGrid(height, step);
+
+    const gains = this.runFloatMap(
+      gridWidth * gridHeight * 3,
+      this.fns.buildVignettingMap,
+      input.lensHandle,
+      input.focal,
+      input.crop,
+      input.aperture,
+      input.distance ?? 1000,
+      width,
+      height,
+      toFlag(input.reverse),
+      step
+    );
+
+    return { gridWidth, gridHeight, step, gains };
   }
 
   private runFloatMap(size: number, fn: CFn, ...args: number[]): Float32Array {

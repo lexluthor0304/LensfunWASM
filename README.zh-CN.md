@@ -22,7 +22,7 @@
   - 几何/畸变
   - TCA（横向色差）
   - 畸变与 TCA 一并校正（按通道的一张映射，按 Lensfun 的校正顺序）
-  - 暗角（vignetting）
+  - 暗角（vignetting，也可单独生成，适用于没有畸变标定的镜头）
 
 输出数据可直接用于 WebGL/WebGPU/canvas 的重映射流程。
 
@@ -167,6 +167,8 @@ console.log(lenses[0]);
 
 `tca` 仅由 TCA 校正生成，其坐标不含畸变校正。需要同时校正时请使用 `buildSubpixelGeometryMap`。
 
+`geometry` 总是最先生成：没有畸变标定的镜头会失败（代码 `-4`）。这类镜头的暗角增益请用 `buildVignettingMap` 生成。
+
 ### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
 
 一并校正畸变与 TCA 的映射，顺序与 Lensfun 一步完成时相同（`ApplySubpixelGeometryDistortion`：先做畸变校正，再在畸变后的位置做 TCA 校正）。
@@ -179,6 +181,20 @@ console.log(lenses[0]);
 - `coords: Float32Array` 长度 = `gridW * gridH * 6`
   - 布局：`[rx, ry, gx, gy, bx, by, ...]`
 - `modifications`：实际应用的校正（`LF_MODIFY_DISTORTION`、`LF_MODIFY_TCA`）。没有 TCA 标定的镜头三个通道都只做畸变校正；两者都没有的镜头会抛出错误（代码 `-4`）。
+
+### `buildVignettingMap(input) => VignettingMap`
+
+只生成暗角增益，不生成几何映射：与同一网格下 `buildCorrectionMaps` 返回的 `vignetting` 相同。没有畸变标定的镜头也可以使用。
+
+`VignettingMapInput`：`MapGridInput` 的各字段、`aperture`（必填）、`distance?`（默认 `1000`）
+
+`VignettingMap`：
+
+- `gridWidth`、`gridHeight`、`step`
+- `gains: Float32Array` 长度 = `gridW * gridH * 3`
+  - 布局：`[rGain, gGain, bGain, ...]`
+
+镜头在该裁切系数下没有暗角标定时会抛出错误（代码 `-4`）。
 
 ### `dispose()`
 

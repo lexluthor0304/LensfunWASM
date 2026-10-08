@@ -22,7 +22,7 @@ Compile [Lensfun](https://github.com/lensfun/lensfun) into WebAssembly and expos
   - Geometry/distortion
   - TCA (transverse chromatic aberration)
   - Distortion and TCA together (one per-channel map, in Lensfun's order)
-  - Vignetting
+  - Vignetting (also alone, for lenses without distortion calibration)
 
 The output maps are designed for WebGL/WebGPU/canvas remap pipelines.
 
@@ -167,6 +167,8 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
 
 `tca` is built with TCA correction alone: its coordinates carry no distortion correction. To correct both, use `buildSubpixelGeometryMap`.
 
+`geometry` is always built first: a lens without distortion calibration fails (code `-4`). Its vignetting gains come from `buildVignettingMap`.
+
 ### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
 
 Distortion and TCA corrected together, as Lensfun applies them in one step (`ApplySubpixelGeometryDistortion`: the distortion correction first, then TCA at the distorted position).
@@ -179,6 +181,20 @@ Distortion and TCA corrected together, as Lensfun applies them in one step (`App
 - `coords: Float32Array` length = `gridW * gridH * 6`
   - Layout: `[rx, ry, gx, gy, bx, by, ...]`
 - `modifications`: the corrections applied (`LF_MODIFY_DISTORTION`, `LF_MODIFY_TCA`). A lens without TCA calibration gets its distortion correction for all three channels; one with neither calibration throws (code `-4`).
+
+### `buildVignettingMap(input) => VignettingMap`
+
+Vignetting gains alone, without a geometry map: the gains `buildCorrectionMaps` gives as `vignetting` for the same grid. It works for a lens without distortion calibration too.
+
+`VignettingMapInput`: the `MapGridInput` fields, `aperture` (required), `distance?` (default `1000`).
+
+`VignettingMap`:
+
+- `gridWidth`, `gridHeight`, `step`
+- `gains: Float32Array` length = `gridW * gridH * 3`
+  - Layout: `[rGain, gGain, bGain, ...]`
+
+A lens without vignetting calibration for the crop factor throws (code `-4`).
 
 ### `dispose()`
 

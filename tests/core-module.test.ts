@@ -14,7 +14,8 @@ import {
   type LensfunClient,
   type LensfunModule,
   type MapGridInput,
-  type SearchLensesInput
+  type SearchLensesInput,
+  type VignettingMapInput
 } from '../src/index';
 
 const assetPath = (name: string) => fileURLToPath(new URL(`../dist/assets/${name}`, import.meta.url));
@@ -77,6 +78,11 @@ const NIKKOR_18_55 = {
 const CANON_28_105 = {
   query: { lensMaker: 'Canon', lensModel: 'EF 28-105mm f/3.5-4.5 II USM', cameraMaker: 'Canon', cameraModel: 'Canon EOS 5D Mark III' },
   model: /^Canon EF 28-105mm f\/3\.5-4\.5 II USM$/
+};
+// Vignetting calibration only: no distortion or TCA data.
+const NIKKOR_60_MICRO = {
+  query: { lensMaker: 'Nikon', lensModel: 'AF-S Micro Nikkor 60mm f/2.8G ED', cameraMaker: 'Nikon Corporation', cameraModel: 'Nikon D850' },
+  model: /^Nikkor AF-S 60 mm f\/2\.8G ED Micro$/
 };
 
 // The pixel position a node stands for (lfw_*: index * step, clamped).
@@ -274,6 +280,42 @@ describe.skipIf(skip)('the built core module', () => {
       // The combined red moves by the distortion too; the TCA map's does not.
       expect(largestShift(combined.coords, 6, 0, combined, width, height))
         .toBeGreaterThan(largestShift(maps.geometry, 2, 0, maps, width, height) - 2);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('builds vignetting gains without a geometry map, for a lens without distortion calibration too', async () => {
+    const { client } = await startClient();
+    try {
+      // The gains buildCorrectionMaps gives with includeVignetting, alone.
+      const canon = findLens(client, CANON_24_105.query, CANON_24_105.model);
+      const grid: MapGridInput = { lensHandle: canon.handle, width: 600, height: 400, focal: 24, crop: 1, step: 8 };
+      const maps = client.buildCorrectionMaps({ ...grid, includeVignetting: true, aperture: 8, distance: 1000 });
+      const alone = client.buildVignettingMap({ ...grid, aperture: 8, distance: 1000 });
+      expect([alone.gridWidth, alone.gridHeight, alone.step]).toEqual([maps.gridWidth, maps.gridHeight, maps.step]);
+      expect(Buffer.from(alone.gains.buffer).equals(Buffer.from(maps.vignetting!.buffer))).toBe(true);
+
+      // A lens with vignetting calibration only: buildCorrectionMaps fails
+      // its geometry map, the gains alone build.
+      const micro = findLens(client, NIKKOR_60_MICRO.query, NIKKOR_60_MICRO.model);
+      expect(client.getAvailableModifications(micro.handle, 1) & (LF_MODIFY_DISTORTION | LF_MODIFY_TCA | LF_MODIFY_VIGNETTING))
+        .toBe(LF_MODIFY_VIGNETTING);
+      const microGrid: MapGridInput = { lensHandle: micro.handle, width: 450, height: 300, focal: 60, crop: 1, step: 6 };
+      expect(() => client.buildCorrectionMaps({ ...microGrid, includeVignetting: true, aperture: 4 })).toThrow(/code -4/);
+      const vignetting = client.buildVignettingMap({ ...microGrid, aperture: 4 });
+      expect([vignetting.gridWidth, vignetting.gridHeight]).toEqual([Math.floor(449 / 6) + 1, Math.floor(299 / 6) + 1]);
+      expect(vignetting.gains.length).toBe(vignetting.gridWidth * vignetting.gridHeight * 3);
+      expectFinite(vignetting.gains);
+      const centre = (Math.floor(vignetting.gridHeight / 2) * vignetting.gridWidth + Math.floor(vignetting.gridWidth / 2)) * 3;
+      expect(vignetting.gains[1]).toBeGreaterThan(1.05);
+      expect(Math.abs(vignetting.gains[centre + 1] - 1)).toBeLessThan(0.02);
+
+      // A lens without vignetting calibration fails; the aperture is required.
+      const plain = findLens(client, CANON_28_105.query, CANON_28_105.model);
+      expect(() => client.buildVignettingMap({ lensHandle: plain.handle, width: 300, height: 200, focal: 28, crop: 1, step: 4, aperture: 8 }))
+        .toThrow(/code -4/);
+      expect(() => client.buildVignettingMap({ ...microGrid } as VignettingMapInput)).toThrow(/aperture is required/);
     } finally {
       client.dispose();
     }
