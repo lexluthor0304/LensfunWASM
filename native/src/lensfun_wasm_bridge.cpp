@@ -399,6 +399,89 @@ LFW_EXPORT int32_t lfw_build_tca_map(
     return 0;
 }
 
+// Distortion and TCA corrected together: Lensfun's stages 2 and 3 in one step
+// (lfModifier::ApplySubpixelGeometryDistortion). Per grid node it gives the
+// source x, y of the red, green and blue samples. Lensfun moves every channel
+// by the distortion correction first, then moves red and blue by the TCA
+// correction at that distorted position. lfw_build_tca_map enables TCA only,
+// so its coordinates carry no distortion. A lens with only one of the two
+// calibrations gets that one (without TCA data every channel gets the
+// geometry map's position).
+// Returns the LF_MODIFY_DISTORTION / LF_MODIFY_TCA flags of the corrections
+// applied (> 0), or a negative code: -1 bad input, -2 buffer too short,
+// -3 no modifier, -4 nothing to apply (no distortion or TCA calibration for
+// this focal length and crop).
+LFW_EXPORT int32_t lfw_build_subpixel_geometry_map(
+    uint32_t lens_handle,
+    float focal,
+    float crop,
+    int32_t width,
+    int32_t height,
+    int32_t reverse,
+    int32_t step,
+    float *out_rgbxy,
+    int32_t out_len)
+{
+    const lfLens *lens = resolve_lens(lens_handle);
+    if (!lens || !out_rgbxy || width <= 0 || height <= 0 || step <= 0)
+    {
+        return -1;
+    }
+
+    const int gx = grid_points(width, step);
+    const int gy = grid_points(height, step);
+    const int needed = gx * gy * 6;
+    if (out_len < needed)
+    {
+        return -2;
+    }
+
+    lfModifier *modifier = lf_modifier_create(
+        lens,
+        focal,
+        crop,
+        width,
+        height,
+        LF_PF_F32,
+        reverse != 0);
+
+    if (!modifier)
+    {
+        return -3;
+    }
+
+    lf_modifier_enable_distortion_correction(modifier);
+    const int mods = lf_modifier_enable_tca_correction(modifier) & (LF_MODIFY_DISTORTION | LF_MODIFY_TCA);
+    if (mods == 0)
+    {
+        lf_modifier_destroy(modifier);
+        return -4;
+    }
+
+    int cursor = 0;
+    float result[6] = {0};
+    for (int y = 0; y < gy; ++y)
+    {
+        const float py = sample_coord(y, step, height);
+        for (int x = 0; x < gx; ++x)
+        {
+            const float px = sample_coord(x, step, width);
+            if (!lf_modifier_apply_subpixel_geometry_distortion(modifier, px, py, 1, 1, result))
+            {
+                lf_modifier_destroy(modifier);
+                return -4;
+            }
+            for (int k = 0; k < 6; ++k)
+            {
+                out_rgbxy[cursor++] = result[k];
+            }
+        }
+    }
+
+    lf_modifier_destroy(modifier);
+    return mods;
+}
+
 LFW_EXPORT int32_t lfw_build_vignetting_map(
     uint32_t lens_handle,
     float focal,

@@ -21,6 +21,7 @@
 - 生成以下矫正映射（map）：
   - 几何/畸变
   - TCA（横向色差）
+  - 畸变与 TCA 一并校正（按通道的一张映射，按 Lensfun 的校正顺序）
   - 暗角（vignetting）
 
 输出数据可直接用于 WebGL/WebGPU/canvas 的重映射流程。
@@ -163,6 +164,21 @@ console.log(lenses[0]);
   - 布局：`[rx, ry, gx, gy, bx, by, ...]`
 - `vignetting?: Float32Array` 长度 = `gridW * gridH * 3`
   - 布局：`[rGain, gGain, bGain, ...]`
+
+`tca` 仅由 TCA 校正生成，其坐标不含畸变校正。需要同时校正时请使用 `buildSubpixelGeometryMap`。
+
+### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
+
+一并校正畸变与 TCA 的映射，顺序与 Lensfun 一步完成时相同（`ApplySubpixelGeometryDistortion`：先做畸变校正，再在畸变后的位置做 TCA 校正）。
+
+`MapGridInput`：`lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`（与 `buildCorrectionMaps` 相同）
+
+`SubpixelGeometryMap`：
+
+- `gridWidth`、`gridHeight`、`step`
+- `coords: Float32Array` 长度 = `gridW * gridH * 6`
+  - 布局：`[rx, ry, gx, gy, bx, by, ...]`
+- `modifications`：实际应用的校正（`LF_MODIFY_DISTORTION`、`LF_MODIFY_TCA`）。没有 TCA 标定的镜头三个通道都只做畸变校正；两者都没有的镜头会抛出错误（代码 `-4`）。
 
 ### `dispose()`
 

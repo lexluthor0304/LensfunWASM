@@ -13,6 +13,7 @@ import {
   type CorrectionMaps,
   type LensfunClient,
   type LensfunModule,
+  type MapGridInput,
   type SearchLensesInput
 } from '../src/index';
 
@@ -97,6 +98,20 @@ function largestShift(coords: Float32Array, stride: number, offset: number, grid
 
 function expectFinite(values: Float32Array) {
   expect(values.every((v) => Number.isFinite(v))).toBe(true);
+}
+
+// Bilinear read of a per-channel map at pixel position (x, y), channel c.
+function sampleChannel(map: Float32Array, grid: { gridWidth: number; gridHeight: number; step: number }, x: number, y: number, c: number) {
+  const gx = Math.max(0, Math.min(grid.gridWidth - 1, x / grid.step));
+  const gy = Math.max(0, Math.min(grid.gridHeight - 1, y / grid.step));
+  const x0 = Math.min(Math.floor(gx), grid.gridWidth - 2);
+  const y0 = Math.min(Math.floor(gy), grid.gridHeight - 2);
+  const fx = gx - x0;
+  const fy = gy - y0;
+  const at = (ix: number, iy: number, k: number) => map[(iy * grid.gridWidth + ix) * 6 + c * 2 + k];
+  const read = (k: number) =>
+    (at(x0, y0, k) * (1 - fx) + at(x0 + 1, y0, k) * fx) * (1 - fy) + (at(x0, y0 + 1, k) * (1 - fx) + at(x0 + 1, y0 + 1, k) * fx) * fy;
+  return { x: read(0), y: read(1) };
 }
 
 describe.skipIf(skip)('the built core module', () => {
@@ -218,6 +233,68 @@ describe.skipIf(skip)('the built core module', () => {
         { lensMaker: 'Canon', lensModel: 'EF 24-105mm f/4L IS USM', cameraMaker: 'Canon', cameraModel: '' }]) {
         expect(client.searchLenses(query).some((lens) => CANON_24_105.model.test(lens.model))).toBe(true);
       }
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('builds distortion and TCA together, TCA taken at the distorted position', async () => {
+    const { client } = await startClient();
+    try {
+      const lens = findLens(client, CANON_24_105.query, CANON_24_105.model);
+      const width = 600;
+      const height = 400;
+      const grid: MapGridInput = { lensHandle: lens.handle, width, height, focal: 24, crop: 1, step: 8 };
+      const maps = client.buildCorrectionMaps({ ...grid, includeTca: true });
+      const nodes = maps.gridWidth * maps.gridHeight;
+      const combined = client.buildSubpixelGeometryMap(grid);
+      expect(combined.modifications).toBe(LF_MODIFY_DISTORTION | LF_MODIFY_TCA);
+      expect([combined.gridWidth, combined.gridHeight, combined.step]).toEqual([maps.gridWidth, maps.gridHeight, maps.step]);
+      expect(combined.coords.length).toBe(nodes * 6);
+      expectFinite(combined.coords);
+      // Green is the geometry map's position; red and blue add TCA's shift,
+      // taken where the distortion correction reads (Lensfun's order).
+      let greenOff = 0;
+      let composeOff = 0;
+      let tcaShift = 0;
+      for (let node = 0; node < nodes; node++) {
+        const gx = maps.geometry[node * 2];
+        const gy = maps.geometry[node * 2 + 1];
+        greenOff = Math.max(greenOff, Math.hypot(combined.coords[node * 6 + 2] - gx, combined.coords[node * 6 + 3] - gy));
+        for (const c of [0, 2]) {
+          const expected = sampleChannel(maps.tca!, maps, gx, gy, c);
+          composeOff = Math.max(composeOff, Math.hypot(combined.coords[node * 6 + c * 2] - expected.x, combined.coords[node * 6 + c * 2 + 1] - expected.y));
+          tcaShift = Math.max(tcaShift, Math.hypot(combined.coords[node * 6 + c * 2] - gx, combined.coords[node * 6 + c * 2 + 1] - gy));
+        }
+      }
+      expect(greenOff).toBeLessThan(1e-3);
+      expect(composeOff).toBeLessThan(0.02);
+      expect(tcaShift).toBeGreaterThan(0.05);
+      expect(tcaShift).toBeLessThan(2);
+      // The combined red moves by the distortion too; the TCA map's does not.
+      expect(largestShift(combined.coords, 6, 0, combined, width, height))
+        .toBeGreaterThan(largestShift(maps.geometry, 2, 0, maps, width, height) - 2);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('gives a lens without TCA calibration its distortion in the combined map', async () => {
+    const { client } = await startClient();
+    try {
+      const lens = findLens(client, NIKKOR_18_55.query, NIKKOR_18_55.model);
+      const grid: MapGridInput = { lensHandle: lens.handle, width: 450, height: 300, focal: 18, crop: 1.528, step: 6 };
+      const maps = client.buildCorrectionMaps(grid);
+      const combined = client.buildSubpixelGeometryMap(grid);
+      expect(combined.modifications).toBe(LF_MODIFY_DISTORTION);
+      let differences = 0;
+      for (let node = 0; node < maps.gridWidth * maps.gridHeight; node++) {
+        for (let c = 0; c < 3; c++) {
+          if (combined.coords[node * 6 + c * 2] !== maps.geometry[node * 2]
+            || combined.coords[node * 6 + c * 2 + 1] !== maps.geometry[node * 2 + 1]) differences++;
+        }
+      }
+      expect(differences).toBe(0);
     } finally {
       client.dispose();
     }

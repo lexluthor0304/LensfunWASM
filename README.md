@@ -21,6 +21,7 @@ Compile [Lensfun](https://github.com/lensfun/lensfun) into WebAssembly and expos
 - Build correction maps for:
   - Geometry/distortion
   - TCA (transverse chromatic aberration)
+  - Distortion and TCA together (one per-channel map, in Lensfun's order)
   - Vignetting
 
 The output maps are designed for WebGL/WebGPU/canvas remap pipelines.
@@ -163,6 +164,21 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
   - Layout: `[rx, ry, gx, gy, bx, by, ...]`
 - `vignetting?: Float32Array` length = `gridW * gridH * 3`
   - Layout: `[rGain, gGain, bGain, ...]`
+
+`tca` is built with TCA correction alone: its coordinates carry no distortion correction. To correct both, use `buildSubpixelGeometryMap`.
+
+### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
+
+Distortion and TCA corrected together, as Lensfun applies them in one step (`ApplySubpixelGeometryDistortion`: the distortion correction first, then TCA at the distorted position).
+
+`MapGridInput`: `lensHandle`, `width`, `height`, `focal`, `crop`, `step?`, `reverse?` (as for `buildCorrectionMaps`).
+
+`SubpixelGeometryMap`:
+
+- `gridWidth`, `gridHeight`, `step`
+- `coords: Float32Array` length = `gridW * gridH * 6`
+  - Layout: `[rx, ry, gx, gy, bx, by, ...]`
+- `modifications`: the corrections applied (`LF_MODIFY_DISTORTION`, `LF_MODIFY_TCA`). A lens without TCA calibration gets its distortion correction for all three channels; one with neither calibration throws (code `-4`).
 
 ### `dispose()`
 

@@ -21,6 +21,7 @@
 - 以下の補正マップ生成
   - 幾何/歪み
   - TCA（倍率色収差）
+  - 歪みと TCA の同時補正（チャンネル別の 1 つのマップ、Lensfun の補正順）
   - 周辺減光（vignetting）
 
 出力マップは WebGL/WebGPU/canvas のリマップ処理に利用できます。
@@ -163,6 +164,21 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
   - 配列レイアウト: `[rx, ry, gx, gy, bx, by, ...]`
 - `vignetting?: Float32Array` 長さ = `gridW * gridH * 3`
   - 配列レイアウト: `[rGain, gGain, bGain, ...]`
+
+`tca` は TCA 補正だけで作られるため、座標に歪み補正は含まれません。両方を補正するには `buildSubpixelGeometryMap` を使います。
+
+### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
+
+歪みと TCA を同時に補正したマップ。Lensfun が 1 ステップで適用する順序（`ApplySubpixelGeometryDistortion`：先に歪み補正、その歪んだ位置で TCA 補正）に従います。
+
+`MapGridInput`: `lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`（`buildCorrectionMaps` と同じ）
+
+`SubpixelGeometryMap`:
+
+- `gridWidth`、`gridHeight`、`step`
+- `coords: Float32Array` 長さ = `gridW * gridH * 6`
+  - 配列レイアウト: `[rx, ry, gx, gy, bx, by, ...]`
+- `modifications`: 適用した補正（`LF_MODIFY_DISTORTION`、`LF_MODIFY_TCA`）。TCA のキャリブレーションがないレンズは 3 チャンネルとも歪み補正のみ、どちらもないレンズは例外（コード `-4`）。
 
 ### `dispose()`
 

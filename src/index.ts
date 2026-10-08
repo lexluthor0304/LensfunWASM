@@ -66,7 +66,7 @@ export interface SearchCamerasInput {
   searchFlags?: number;
 }
 
-export interface CorrectionInput {
+export interface MapGridInput {
   lensHandle: number;
   width: number;
   height: number;
@@ -74,6 +74,9 @@ export interface CorrectionInput {
   crop: number;
   step?: number;
   reverse?: boolean;
+}
+
+export interface CorrectionInput extends MapGridInput {
   includeTca?: boolean;
   includeVignetting?: boolean;
   aperture?: number;
@@ -89,6 +92,19 @@ export interface CorrectionMaps {
   vignetting?: Float32Array;
 }
 
+export interface SubpixelGeometryMap {
+  gridWidth: number;
+  gridHeight: number;
+  step: number;
+  /**
+   * Per grid node, the source x, y of red, green and blue with distortion and
+   * TCA corrected together: [rx, ry, gx, gy, bx, by, ...].
+   */
+  coords: Float32Array;
+  /** The corrections applied: LF_MODIFY_DISTORTION and/or LF_MODIFY_TCA. */
+  modifications: number;
+}
+
 type CFn = (...args: unknown[]) => unknown;
 
 interface NativeFns {
@@ -99,6 +115,7 @@ interface NativeFns {
   availableMods: CFn;
   buildGeometryMap: CFn;
   buildTcaMap: CFn;
+  buildSubpixelGeometryMap: CFn;
   buildVignettingMap: CFn;
   freePtr: CFn;
 }
@@ -225,6 +242,17 @@ function bindFns(module: LensfunModule): NativeFns {
       'number'
     ]),
     buildTcaMap: module.cwrap('lfw_build_tca_map', 'number', [
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number',
+      'number'
+    ]),
+    buildSubpixelGeometryMap: module.cwrap('lfw_build_subpixel_geometry_map', 'number', [
       'number',
       'number',
       'number',
@@ -363,12 +391,59 @@ export class LensfunClient {
     return result;
   }
 
+  /**
+   * Distortion and TCA corrected together, in one map: Lensfun's
+   * ApplySubpixelGeometryDistortion, which moves every channel by the
+   * distortion correction and then red and blue by the TCA correction at
+   * that distorted position. Use it instead of combining `geometry` and
+   * `tca` from buildCorrectionMaps: `tca` is built with TCA correction alone,
+   * so its coordinates carry no distortion.
+   *
+   * A lens without TCA calibration gets its distortion correction for all
+   * three channels (`modifications` then lacks LF_MODIFY_TCA); one with
+   * neither calibration throws (code -4).
+   */
+  buildSubpixelGeometryMap(input: MapGridInput): SubpixelGeometryMap {
+    this.ensureAlive();
+
+    const width = requirePositiveInt(input.width, 'width');
+    const height = requirePositiveInt(input.height, 'height');
+    const step = requirePositiveInt(input.step ?? 1, 'step');
+
+    const gridWidth = toGrid(width, step);
+    const gridHeight = toGrid(height, step);
+
+    const { rc, values } = this.callFloatMap(
+      gridWidth * gridHeight * 6,
+      this.fns.buildSubpixelGeometryMap,
+      [input.lensHandle, input.focal, input.crop, width, height, toFlag(input.reverse), step],
+      (code) => code > 0
+    );
+
+    return {
+      gridWidth,
+      gridHeight,
+      step,
+      coords: values,
+      modifications: rc
+    };
+  }
+
   private runFloatMap(size: number, fn: CFn, ...args: number[]): Float32Array {
+    return this.callFloatMap(size, fn, args, (code) => code === 0).values;
+  }
+
+  private callFloatMap(
+    size: number,
+    fn: CFn,
+    args: number[],
+    succeeded: (code: number) => boolean
+  ): { rc: number; values: Float32Array } {
     const bytes = size * 4;
     const ptr = this.module._malloc(bytes);
     try {
       const rc = fn(...args, ptr, size) as number;
-      if (rc !== 0) {
+      if (!succeeded(rc)) {
         throw new Error(`[lensfun-wasm] native map builder failed with code ${rc}`);
       }
 
@@ -379,9 +454,9 @@ export class LensfunClient {
       }
       const start = ptr >> 2;
       const end = start + size;
-      const out = new Float32Array(size);
-      out.set(heap.subarray(start, end));
-      return out;
+      const values = new Float32Array(size);
+      values.set(heap.subarray(start, end));
+      return { rc, values };
     } finally {
       this.module._free(ptr);
     }
