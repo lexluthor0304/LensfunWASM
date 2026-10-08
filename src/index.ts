@@ -19,6 +19,11 @@ export interface LensfunModule {
    * no HEAP views on Module unless asked), and their maps cannot be read.
    */
   HEAPF32?: Float32Array;
+  /**
+   * The grid flags the core's map builders understand (1: `coverFrame`).
+   * Cores before 0.1.4 do not export it and build the default grid only.
+   */
+  _lfw_grid_flags?: () => number;
 }
 
 export interface LensfunInitOptions {
@@ -74,6 +79,18 @@ export interface MapGridInput {
   crop: number;
   step?: number;
   reverse?: boolean;
+  /**
+   * Whether the grid covers the frame. Nodes sit every `step` pixels from 0
+   * (node i at pixel i * step). By default the grid ends on the last node at
+   * or before the last pixel, `floor((size - 1) / step) + 1` nodes per axis,
+   * so the last `(size - 1) % step` columns and rows lie past it with no
+   * node to interpolate towards. With `coverFrame` it has
+   * `ceil((size - 1) / step) + 1`: one more node per axis where `step` does
+   * not divide `size - 1`, up to `step - 1` pixels past the last pixel and
+   * computed by Lensfun like the others, so every pixel lies between nodes
+   * and interpolation at `x / step` needs no clamping. Default `false`.
+   */
+  coverFrame?: boolean;
 }
 
 export interface CorrectionInput extends MapGridInput {
@@ -146,8 +163,23 @@ function toFlag(value: boolean | undefined): number {
   return value ? 1 : 0;
 }
 
-function toGrid(size: number, step: number): number {
-  return Math.floor((size - 1) / step) + 1;
+// lfw_* grid flags (their last argument).
+const GRID_COVER_FRAME = 1;
+
+function toGrid(size: number, step: number, coverFrame = false): number {
+  return (coverFrame ? Math.ceil((size - 1) / step) : Math.floor((size - 1) / step)) + 1;
+}
+
+// The grid flags of a request, which the core must understand: an older
+// core would fill the default grid into a buffer laid out for another.
+function gridFlags(input: MapGridInput, supported: number): number {
+  if (!input.coverFrame) {
+    return 0;
+  }
+  if (!(supported & GRID_COVER_FRAME)) {
+    throw new Error('[lensfun-wasm] the core module builds no grid that covers the frame (coverFrame); load the core of the same release');
+  }
+  return GRID_COVER_FRAME;
 }
 
 function requirePositiveInt(value: number, field: string): number {
@@ -252,6 +284,7 @@ function bindFns(module: LensfunModule): NativeFns {
       'number',
       'number',
       'number',
+      'number',
       'number'
     ]),
     buildTcaMap: module.cwrap('lfw_build_tca_map', 'number', [
@@ -263,9 +296,11 @@ function bindFns(module: LensfunModule): NativeFns {
       'number',
       'number',
       'number',
+      'number',
       'number'
     ]),
     buildSubpixelGeometryMap: module.cwrap('lfw_build_subpixel_geometry_map', 'number', [
+      'number',
       'number',
       'number',
       'number',
@@ -287,6 +322,7 @@ function bindFns(module: LensfunModule): NativeFns {
       'number',
       'number',
       'number',
+      'number',
       'number'
     ]),
     freePtr: module.cwrap('lfw_free', null, ['number'])
@@ -296,11 +332,13 @@ function bindFns(module: LensfunModule): NativeFns {
 export class LensfunClient {
   private readonly module: LensfunModule;
   private readonly fns: NativeFns;
+  private readonly gridFlagsSupported: number;
   private disposed = false;
 
   constructor(module: LensfunModule, fns: NativeFns) {
     this.module = module;
     this.fns = fns;
+    this.gridFlagsSupported = typeof module._lfw_grid_flags === 'function' ? module._lfw_grid_flags() : 0;
   }
 
   dispose(): void {
@@ -345,20 +383,16 @@ export class LensfunClient {
     const width = requirePositiveInt(input.width, 'width');
     const height = requirePositiveInt(input.height, 'height');
     const step = requirePositiveInt(input.step ?? 1, 'step');
+    const flags = gridFlags(input, this.gridFlagsSupported);
 
-    const gridWidth = toGrid(width, step);
-    const gridHeight = toGrid(height, step);
+    const gridWidth = toGrid(width, step, input.coverFrame);
+    const gridHeight = toGrid(height, step, input.coverFrame);
 
     const geometry = this.runFloatMap(
       gridWidth * gridHeight * 2,
       this.fns.buildGeometryMap,
-      input.lensHandle,
-      input.focal,
-      input.crop,
-      width,
-      height,
-      toFlag(input.reverse),
-      step
+      [input.lensHandle, input.focal, input.crop, width, height, toFlag(input.reverse), step],
+      flags
     );
 
     const result: CorrectionMaps = {
@@ -372,13 +406,8 @@ export class LensfunClient {
       result.tca = this.runFloatMap(
         gridWidth * gridHeight * 6,
         this.fns.buildTcaMap,
-        input.lensHandle,
-        input.focal,
-        input.crop,
-        width,
-        height,
-        toFlag(input.reverse),
-        step
+        [input.lensHandle, input.focal, input.crop, width, height, toFlag(input.reverse), step],
+        flags
       );
     }
 
@@ -389,15 +418,8 @@ export class LensfunClient {
       result.vignetting = this.runFloatMap(
         gridWidth * gridHeight * 3,
         this.fns.buildVignettingMap,
-        input.lensHandle,
-        input.focal,
-        input.crop,
-        input.aperture,
-        input.distance ?? 1000,
-        width,
-        height,
-        toFlag(input.reverse),
-        step
+        [input.lensHandle, input.focal, input.crop, input.aperture, input.distance ?? 1000, width, height, toFlag(input.reverse), step],
+        flags
       );
     }
 
@@ -423,13 +445,14 @@ export class LensfunClient {
     const height = requirePositiveInt(input.height, 'height');
     const step = requirePositiveInt(input.step ?? 1, 'step');
 
-    const gridWidth = toGrid(width, step);
-    const gridHeight = toGrid(height, step);
+    const gridWidth = toGrid(width, step, input.coverFrame);
+    const gridHeight = toGrid(height, step, input.coverFrame);
 
     const { rc, values } = this.callFloatMap(
       gridWidth * gridHeight * 6,
       this.fns.buildSubpixelGeometryMap,
       [input.lensHandle, input.focal, input.crop, width, height, toFlag(input.reverse), step],
+      gridFlags(input, this.gridFlagsSupported),
       (code) => code > 0
     );
 
@@ -460,40 +483,36 @@ export class LensfunClient {
       throw new Error('[lensfun-wasm] aperture is required for vignetting map');
     }
 
-    const gridWidth = toGrid(width, step);
-    const gridHeight = toGrid(height, step);
+    const gridWidth = toGrid(width, step, input.coverFrame);
+    const gridHeight = toGrid(height, step, input.coverFrame);
 
     const gains = this.runFloatMap(
       gridWidth * gridHeight * 3,
       this.fns.buildVignettingMap,
-      input.lensHandle,
-      input.focal,
-      input.crop,
-      input.aperture,
-      input.distance ?? 1000,
-      width,
-      height,
-      toFlag(input.reverse),
-      step
+      [input.lensHandle, input.focal, input.crop, input.aperture, input.distance ?? 1000, width, height, toFlag(input.reverse), step],
+      gridFlags(input, this.gridFlagsSupported)
     );
 
     return { gridWidth, gridHeight, step, gains };
   }
 
-  private runFloatMap(size: number, fn: CFn, ...args: number[]): Float32Array {
-    return this.callFloatMap(size, fn, args, (code) => code === 0).values;
+  private runFloatMap(size: number, fn: CFn, args: number[], flags: number): Float32Array {
+    return this.callFloatMap(size, fn, args, flags, (code) => code === 0).values;
   }
 
+  // Runs a map builder with `args`, then its output buffer of `size` floats
+  // and the grid flags (lfw_*'s last arguments), and copies the map out.
   private callFloatMap(
     size: number,
     fn: CFn,
     args: number[],
+    flags: number,
     succeeded: (code: number) => boolean
   ): { rc: number; values: Float32Array } {
     const bytes = size * 4;
     const ptr = this.module._malloc(bytes);
     try {
-      const rc = fn(...args, ptr, size) as number;
+      const rc = fn(...args, ptr, size, flags) as number;
       if (!succeeded(rc)) {
         throw new Error(`[lensfun-wasm] native map builder failed with code ${rc}`);
       }

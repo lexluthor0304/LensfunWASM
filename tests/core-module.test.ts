@@ -85,7 +85,8 @@ const NIKKOR_60_MICRO = {
   model: /^Nikkor AF-S 60 mm f\/2\.8G ED Micro$/
 };
 
-// The pixel position a node stands for (lfw_*: index * step, clamped).
+// The pixel position a node stands for (lfw_*: index * step, within the frame
+// in the default grid).
 const nodeAt = (index: number, step: number, size: number) => Math.min(index * step, size - 1);
 
 // The largest distance of a node's channel from the node's own position.
@@ -316,6 +317,123 @@ describe.skipIf(skip)('the built core module', () => {
       expect(() => client.buildVignettingMap({ lensHandle: plain.handle, width: 300, height: 200, focal: 28, crop: 1, step: 4, aperture: 8 }))
         .toThrow(/code -4/);
       expect(() => client.buildVignettingMap({ ...microGrid } as VignettingMapInput)).toThrow(/aperture is required/);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('builds grids that cover the frame', async () => {
+    const { client } = await startClient();
+    try {
+      const lens = findLens(client, CANON_24_105.query, CANON_24_105.model);
+      // 600 x 400 at step 8: by default nodes at 0-592 and 0-392, and the last
+      // 7 columns and rows past them; covering, one more node each way, at
+      // 600 and 400 (past the last pixel, 599 and 399).
+      const width = 600;
+      const height = 400;
+      const grid: MapGridInput = { lensHandle: lens.handle, width, height, focal: 24, crop: 1, step: 8 };
+      const all = { includeTca: true, includeVignetting: true, aperture: 8 };
+      const plain = client.buildCorrectionMaps({ ...grid, ...all });
+      const covered = client.buildCorrectionMaps({ ...grid, ...all, coverFrame: true });
+      expect([plain.gridWidth, plain.gridHeight]).toEqual([75, 50]);
+      expect([covered.gridWidth, covered.gridHeight, covered.step]).toEqual([76, 51, 8]);
+      const subpixel = client.buildSubpixelGeometryMap({ ...grid, coverFrame: true });
+      const gains = client.buildVignettingMap({ ...grid, aperture: 8, coverFrame: true });
+      expect([subpixel.gridWidth, subpixel.gridHeight, gains.gridWidth, gains.gridHeight]).toEqual([76, 51, 76, 51]);
+      const coveredMaps: [Float32Array, Float32Array, number][] = [
+        [plain.geometry, covered.geometry, 2], [plain.tca!, covered.tca!, 6], [plain.vignetting!, covered.vignetting!, 3],
+        [client.buildSubpixelGeometryMap(grid).coords, subpixel.coords, 6],
+        [client.buildVignettingMap({ ...grid, aperture: 8 }).gains, gains.gains, 3]
+      ];
+      for (const [map, cover, stride] of coveredMaps) {
+        expect(cover.length).toBe(76 * 51 * stride);
+        expectFinite(cover);
+        // The default grid's nodes, value for value.
+        let differences = 0;
+        for (let gy = 0; gy < 50; gy++) {
+          for (let gx = 0; gx < 75; gx++) {
+            for (let k = 0; k < stride; k++) {
+              if (map[(gy * 75 + gx) * stride + k] !== cover[(gy * 76 + gx) * stride + k]) differences++;
+            }
+          }
+        }
+        expect(differences).toBe(0);
+      }
+      // The new nodes are Lensfun's values at node * step, as a covering
+      // grid at step 4 has them (600 = 150 x 4, 400 = 100 x 4).
+      const half = client.buildSubpixelGeometryMap({ ...grid, step: 4, coverFrame: true });
+      expect([half.gridWidth, half.gridHeight]).toEqual([151, 101]);
+      let edgeDifferences = 0;
+      for (let gy = 0; gy < 51; gy++) {
+        for (let gx = 0; gx < 76; gx++) {
+          if (gx < 75 && gy < 50) continue;
+          for (let k = 0; k < 6; k++) {
+            if (subpixel.coords[(gy * 76 + gx) * 6 + k] !== half.coords[(gy * 2 * 151 + gx * 2) * 6 + k]) edgeDifferences++;
+          }
+        }
+      }
+      expect(edgeDifferences).toBe(0);
+      // Every pixel lies between nodes: the covering grid interpolates to
+      // Lensfun's own positions (its map at step 1) within 0.02 px at every
+      // pixel; the default grid, held at its last node past it, is several
+      // pixels off at the corner.
+      const exact = client.buildSubpixelGeometryMap({ ...grid, step: 1 });
+      const sample = (map: Float32Array, at: { gridWidth: number; gridHeight: number; step: number }, x: number, y: number, k: number) => {
+        const gx = x / at.step;
+        const gy = y / at.step;
+        const x0 = Math.min(Math.floor(gx), at.gridWidth - 1);
+        const y0 = Math.min(Math.floor(gy), at.gridHeight - 1);
+        const x1 = Math.min(x0 + 1, at.gridWidth - 1);
+        const y1 = Math.min(y0 + 1, at.gridHeight - 1);
+        const fx = Math.min(gx - x0, 1);
+        const fy = Math.min(gy - y0, 1);
+        const node = (ix: number, iy: number) => map[(iy * at.gridWidth + ix) * 6 + k];
+        return (node(x0, y0) * (1 - fx) + node(x1, y0) * fx) * (1 - fy) + (node(x0, y1) * (1 - fx) + node(x1, y1) * fx) * fy;
+      };
+      const defaultGrid = client.buildSubpixelGeometryMap(grid);
+      let coveredError = 0;
+      let defaultError = 0;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          for (let c = 0; c < 3; c++) {
+            const i = (y * width + x) * 6 + c * 2;
+            const ex = exact.coords[i];
+            const ey = exact.coords[i + 1];
+            coveredError = Math.max(coveredError, Math.hypot(sample(subpixel.coords, subpixel, x, y, c * 2) - ex, sample(subpixel.coords, subpixel, x, y, c * 2 + 1) - ey));
+            defaultError = Math.max(defaultError, Math.hypot(sample(defaultGrid.coords, defaultGrid, x, y, c * 2) - ex, sample(defaultGrid.coords, defaultGrid, x, y, c * 2 + 1) - ey));
+          }
+        }
+      }
+      expect(coveredError).toBeLessThan(0.02);
+      expect(defaultError).toBeGreaterThan(5);
+      // A frame whose sides step divides: the same grid either way.
+      const even = { ...grid, width: 601, height: 401 };
+      const evenCovered = client.buildCorrectionMaps({ ...even, coverFrame: true });
+      expect([evenCovered.gridWidth, evenCovered.gridHeight]).toEqual([76, 51]);
+      expect(Buffer.from(evenCovered.geometry.buffer).equals(Buffer.from(client.buildCorrectionMaps(even).geometry.buffer))).toBe(true);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('refuses coverFrame with a core that cannot build it', async () => {
+    const errors: string[] = [];
+    const factory = nodeModuleFactory(() => {}, errors);
+    // A core before 0.1.4: no lfw_grid_flags, the default grid only.
+    const client = await createLensfun({
+      moduleFactory: async (options) => {
+        const module = await factory(options);
+        delete module._lfw_grid_flags;
+        return module;
+      }
+    });
+    try {
+      const lens = findLens(client, CANON_24_105.query, CANON_24_105.model);
+      const grid: MapGridInput = { lensHandle: lens.handle, width: 120, height: 80, focal: 24, crop: 1, step: 8 };
+      expect(() => client.buildCorrectionMaps({ ...grid, coverFrame: true })).toThrow(/covers the frame/);
+      expect(() => client.buildSubpixelGeometryMap({ ...grid, coverFrame: true })).toThrow(/covers the frame/);
+      expect(() => client.buildVignettingMap({ ...grid, aperture: 8, coverFrame: true })).toThrow(/covers the frame/);
+      expect(client.buildCorrectionMaps(grid).gridWidth).toBe(15);
     } finally {
       client.dispose();
     }

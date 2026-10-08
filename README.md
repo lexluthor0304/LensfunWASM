@@ -154,6 +154,7 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
 - `includeVignetting?` (default `false`)
 - `aperture?` (required when `includeVignetting = true`)
 - `distance?` (default `1000`)
+- `coverFrame?` (default `false`): a grid that covers the frame (see [Map grids](#map-grids))
 
 `CorrectionMaps`:
 
@@ -173,7 +174,7 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
 
 Distortion and TCA corrected together, as Lensfun applies them in one step (`ApplySubpixelGeometryDistortion`: the distortion correction first, then TCA at the distorted position).
 
-`MapGridInput`: `lensHandle`, `width`, `height`, `focal`, `crop`, `step?`, `reverse?` (as for `buildCorrectionMaps`).
+`MapGridInput`: `lensHandle`, `width`, `height`, `focal`, `crop`, `step?`, `reverse?`, `coverFrame?` (as for `buildCorrectionMaps`).
 
 `SubpixelGeometryMap`:
 
@@ -195,6 +196,12 @@ Vignetting gains alone, without a geometry map: the gains `buildCorrectionMaps` 
   - Layout: `[rGain, gGain, bGain, ...]`
 
 A lens without vignetting calibration for the crop factor throws (code `-4`).
+
+### Map grids
+
+Every map is a grid of nodes, row by row, with a node every `step` pixels from 0 (node `i` at pixel `i * step`). By default it has `floor((size - 1) / step) + 1` nodes per axis, the last at or before the last pixel: the last `(size - 1) % step` columns and rows lie past it, with no node to interpolate towards.
+
+With `coverFrame: true` (every map builder takes it) the grid covers the frame: `ceil((size - 1) / step) + 1` nodes per axis. Where `step` does not divide `width - 1` (`height - 1`) that is one more node, up to `step - 1` pixels past the last pixel, which Lensfun computes like the others. Every pixel then lies between nodes, and sampling the grid bilinearly at `(x / step, y / step)` needs no clamping (a texture of the nodes with linear filtering, for example). The other nodes are the default grid's, value for value. A core before 0.1.4 cannot build this grid: with one, `coverFrame` throws.
 
 ### `dispose()`
 
@@ -294,6 +301,10 @@ Database path or `.data` load is wrong.
 ### `the core module exports no HEAPF32 view`
 
 The core (`lensfun-core.js`) is older than the JS API: cores before 0.1.4 do not export `HEAPF32`. Load the core of the same release.
+
+### `the core module builds no grid that covers the frame`
+
+The core (`lensfun-core.js`) is older than the JS API: cores before 0.1.4 build the default grid only. Load the core of the same release, or leave `coverFrame` off.
 
 ### `native map builder failed with code ...`
 

@@ -154,6 +154,7 @@ console.log(lenses[0]);
 - `includeVignetting?`（默认 `false`）
 - `aperture?`（当 `includeVignetting = true` 时必填）
 - `distance?`（默认 `1000`）
+- `coverFrame?`（默认 `false`）：覆盖整幅画面的网格（见[映射网格](#映射网格)）
 
 `CorrectionMaps`：
 
@@ -173,7 +174,7 @@ console.log(lenses[0]);
 
 一并校正畸变与 TCA 的映射，顺序与 Lensfun 一步完成时相同（`ApplySubpixelGeometryDistortion`：先做畸变校正，再在畸变后的位置做 TCA 校正）。
 
-`MapGridInput`：`lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`（与 `buildCorrectionMaps` 相同）
+`MapGridInput`：`lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`、`coverFrame?`（与 `buildCorrectionMaps` 相同）
 
 `SubpixelGeometryMap`：
 
@@ -195,6 +196,12 @@ console.log(lenses[0]);
   - 布局：`[rGain, gGain, bGain, ...]`
 
 镜头在该裁切系数下没有暗角标定时会抛出错误（代码 `-4`）。
+
+### 映射网格
+
+每张映射都是按行排列的节点网格，从 0 开始每隔 `step` 像素一个节点（节点 `i` 位于像素 `i * step`）。默认每个方向有 `floor((size - 1) / step) + 1` 个节点，最后一个位于最后一个像素或其之前：最后 `(size - 1) % step` 列和行落在它之外，没有可供插值的下一个节点。
+
+传入 `coverFrame: true`（所有映射生成方法都支持）时，网格覆盖整幅画面：每个方向 `ceil((size - 1) / step) + 1` 个节点。`step` 不能整除 `width - 1`（`height - 1`）时会多出一个节点，最多位于最后一个像素之外 `step - 1` 像素处，由 Lensfun 与其他节点一样计算。这样每个像素都落在节点之间，在 `(x / step, y / step)` 处做双线性采样无需截断（例如把节点作为纹理并使用线性过滤）。其余节点与默认网格逐值相同。0.1.4 之前的核心无法生成这种网格：此时传入 `coverFrame` 会抛出错误。
 
 ### `dispose()`
 
@@ -293,6 +300,10 @@ scripts/sync-upstream.sh origin/master
 ### `the core module exports no HEAPF32 view`
 
 核心（`lensfun-core.js`）比 JS API 旧：0.1.4 之前的核心没有导出 `HEAPF32`。请加载同一版本的核心。
+
+### `the core module builds no grid that covers the frame`
+
+核心（`lensfun-core.js`）比 JS API 旧：0.1.4 之前的核心只能生成默认网格。请加载同一版本的核心，或不使用 `coverFrame`。
 
 ### `native map builder failed with code ...`
 

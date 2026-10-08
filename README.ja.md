@@ -154,6 +154,7 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
 - `includeVignetting?`（既定 `false`）
 - `aperture?`（`includeVignetting = true` の場合必須）
 - `distance?`（既定 `1000`）
+- `coverFrame?`（既定 `false`）: 画面全体を覆うグリッド（[マップのグリッド](#マップのグリッド)を参照）
 
 `CorrectionMaps`:
 
@@ -173,7 +174,7 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
 
 歪みと TCA を同時に補正したマップ。Lensfun が 1 ステップで適用する順序（`ApplySubpixelGeometryDistortion`：先に歪み補正、その歪んだ位置で TCA 補正）に従います。
 
-`MapGridInput`: `lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`（`buildCorrectionMaps` と同じ）
+`MapGridInput`: `lensHandle`、`width`、`height`、`focal`、`crop`、`step?`、`reverse?`、`coverFrame?`（`buildCorrectionMaps` と同じ）
 
 `SubpixelGeometryMap`:
 
@@ -195,6 +196,12 @@ Lensfun の `LF_MODIFY_*` ビットフラグを返します。
   - 配列レイアウト: `[rGain, gGain, bGain, ...]`
 
 そのクロップ係数で周辺減光のキャリブレーションがないレンズは例外（コード `-4`）。
+
+### マップのグリッド
+
+どのマップも行ごとに並んだノードのグリッドで、0 から `step` ピクセルごとにノードがあります（ノード `i` はピクセル `i * step`）。既定では各軸 `floor((size - 1) / step) + 1` 個で、最後のノードは最後のピクセルかその手前にあります。そのため最後の `(size - 1) % step` 列と行はその外側にあり、補間先のノードがありません。
+
+`coverFrame: true`（すべてのマップ生成メソッドで指定可）ではグリッドが画面全体を覆い、各軸 `ceil((size - 1) / step) + 1` 個になります。`step` が `width - 1`（`height - 1`）を割り切れないときはノードが 1 つ増え、最後のピクセルから最大 `step - 1` ピクセル外側に置かれ、Lensfun が他のノードと同様に計算します。すべてのピクセルがノードの間に入るので、`(x / step, y / step)` での双線形サンプリングにクランプは不要です（ノードをテクスチャにして線形フィルタを使う場合など）。その他のノードは既定のグリッドと値まで同じです。0.1.4 より前のコアはこのグリッドを作れず、その場合 `coverFrame` は例外になります。
 
 ### `dispose()`
 
@@ -293,6 +300,10 @@ DB パス、または `.data` 読み込みが不正です。
 ### `the core module exports no HEAPF32 view`
 
 コア（`lensfun-core.js`）が JS API より古い状態です。0.1.4 より前のコアは `HEAPF32` を公開していません。同じリリースのコアを読み込んでください。
+
+### `the core module builds no grid that covers the frame`
+
+コア（`lensfun-core.js`）が JS API より古い状態です。0.1.4 より前のコアは既定のグリッドしか作れません。同じリリースのコアを読み込むか、`coverFrame` を使わないでください。
 
 ### `native map builder failed with code ...`
 
