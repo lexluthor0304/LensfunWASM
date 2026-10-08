@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 
 #include <algorithm>
+#include <deque>
 #include <fstream>
 #include <string>
 #include <vector>
@@ -34,7 +35,11 @@ struct _GMarkupParseContext
     const GMarkupParser *parser = nullptr;
     gpointer user_data = nullptr;
     GDestroyNotify user_data_dnotify = nullptr;
-    std::vector<std::string> element_stack;
+    // Lensfun's parser keeps the element_name pointers it is handed (its
+    // context stack) until the element ends, as GLib allows. A deque never
+    // moves its strings when it grows; a vector did, which left those
+    // pointers dangling and made whole database files fail to parse.
+    std::deque<std::string> element_stack;
     gint current_line = 1;
     gint current_column = 0;
 };

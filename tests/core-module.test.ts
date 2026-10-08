@@ -195,4 +195,18 @@ describe.skipIf(skip)('the built core module', () => {
       client.dispose();
     }
   });
+
+  it('parses every database file', async () => {
+    const { client, errors } = await startClient();
+    try {
+      // 0.1.3 failed 19 files with "Inappropriate context" (its element
+      // stack moved the names the parser kept): 282 of 1558 lenses, among
+      // them every Samyang SLR lens, and 272 of 1045 cameras.
+      expect(errors.filter((message) => message.includes('[Lensfun]'))).toEqual([]);
+      const samyang = client.searchLenses({ lensMaker: 'Samyang', lensModel: '10mm f/2.8 ED AS NCS CS', cameraMaker: 'Nikon Corporation', cameraModel: 'Nikon D7000' });
+      expect(samyang.some((lens) => lens.model === 'Samyang 10mm f/2.8 ED AS NCS CS')).toBe(true);
+    } finally {
+      client.dispose();
+    }
+  });
 });
