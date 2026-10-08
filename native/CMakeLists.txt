@@ -82,7 +82,9 @@ if(EMSCRIPTEN)
     "-sFORCE_FILESYSTEM=1"
     "-sENVIRONMENT=web,worker"
     "-sEXPORTED_FUNCTIONS=['_malloc','_free','_lfw_init','_lfw_dispose','_lfw_find_lenses_json','_lfw_find_cameras_json','_lfw_available_mods','_lfw_build_geometry_map','_lfw_build_tca_map','_lfw_build_vignetting_map','_lfw_free']"
-    "-sEXPORTED_RUNTIME_METHODS=['cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8']"
+    # HEAPF32: the JS API copies the maps out of the heap. Emscripten puts no
+    # HEAP views on Module unless they are listed here.
+    "-sEXPORTED_RUNTIME_METHODS=['cwrap','UTF8ToString','stringToUTF8','lengthBytesUTF8','HEAPF32']"
     "--preload-file"
     "${LENSFUN_ROOT}/data/db@/lensfun-db"
   )

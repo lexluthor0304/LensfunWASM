@@ -44,7 +44,7 @@
 - Node.js 22+
 - npm 10+
 - CMake 3.20+
-- Emscripten（`emcc`、`emcmake` が PATH にあること）
+- Emscripten（`emcc`、`emcmake` が PATH にあること。CI とリリースは 6.0.4 でビルド）
 
 ## インストール
 
@@ -257,6 +257,10 @@ DB パス、または `.data` 読み込みが不正です。
 
 - `dataUrl` が `lensfun-core.data` を指しているか確認
 - `dbPath` がプリロードパス（既定 `/lensfun-db`）と一致しているか確認
+
+### `the core module exports no HEAPF32 view`
+
+コア（`lensfun-core.js`）が JS API より古い状態です。0.1.4 より前のコアは `HEAPF32` を公開していません。同じリリースのコアを読み込んでください。
 
 ### `native map builder failed with code ...`
 

@@ -44,7 +44,7 @@
 - Node.js 22+
 - npm 10+
 - CMake 3.20+
-- Emscripten（`emcc`、`emcmake` 可用）
+- Emscripten（`emcc`、`emcmake` 可用；CI 与发布使用 6.0.4 构建）
 
 ## 安装
 
@@ -257,6 +257,10 @@ scripts/sync-upstream.sh origin/master
 
 - 检查 `dataUrl` 是否指向 `lensfun-core.data`
 - 检查 `dbPath` 是否与预加载路径一致（默认 `/lensfun-db`）
+
+### `the core module exports no HEAPF32 view`
+
+核心（`lensfun-core.js`）比 JS API 旧：0.1.4 之前的核心没有导出 `HEAPF32`。请加载同一版本的核心。
 
 ### `native map builder failed with code ...`
 

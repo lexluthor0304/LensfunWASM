@@ -44,7 +44,7 @@ The output maps are designed for WebGL/WebGPU/canvas remap pipelines.
 - Node.js 22+
 - npm 10+
 - CMake 3.20+
-- Emscripten (`emcc`, `emcmake` in PATH)
+- Emscripten (`emcc`, `emcmake` in PATH); CI and releases build with 6.0.4
 
 ## Installation
 
@@ -258,6 +258,10 @@ Database path or `.data` load is wrong.
 
 - Ensure `dataUrl` points to `lensfun-core.data`
 - Ensure `dbPath` matches preloaded path (`/lensfun-db` by default)
+
+### `the core module exports no HEAPF32 view`
+
+The core (`lensfun-core.js`) is older than the JS API: cores before 0.1.4 do not export `HEAPF32`. Load the core of the same release.
 
 ### `native map builder failed with code ...`
 

@@ -13,7 +13,12 @@ export interface LensfunModule {
   UTF8ToString: (ptr: number) => string;
   _malloc: (size: number) => number;
   _free: (ptr: number) => void;
-  HEAPF32: Float32Array;
+  /**
+   * The core's float view of its memory, which the map builders copy from.
+   * Cores built before 0.1.4 do not export it (newer Emscripten releases put
+   * no HEAP views on Module unless asked), and their maps cannot be read.
+   */
+  HEAPF32?: Float32Array;
 }
 
 export interface LensfunInitOptions {
@@ -367,10 +372,15 @@ export class LensfunClient {
         throw new Error(`[lensfun-wasm] native map builder failed with code ${rc}`);
       }
 
+      // Read after the call: memory growth replaces the view.
+      const heap = this.module.HEAPF32;
+      if (!heap) {
+        throw new Error('[lensfun-wasm] the core module exports no HEAPF32 view; rebuild it with HEAPF32 in EXPORTED_RUNTIME_METHODS');
+      }
       const start = ptr >> 2;
       const end = start + size;
       const out = new Float32Array(size);
-      out.set(this.module.HEAPF32.subarray(start, end));
+      out.set(heap.subarray(start, end));
       return out;
     } finally {
       this.module._free(ptr);
