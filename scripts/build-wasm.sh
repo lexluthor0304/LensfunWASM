@@ -11,8 +11,8 @@ if ! command -v emcc >/dev/null 2>&1; then
 Install and activate Emscripten first, for example:
   git clone https://github.com/emscripten-core/emsdk.git
   cd emsdk
-  ./emsdk install latest
-  ./emsdk activate latest
+  ./emsdk install 6.0.4   # the release CI builds with (.github/workflows)
+  ./emsdk activate 6.0.4
   source ./emsdk_env.sh
 MSG
   exit 1

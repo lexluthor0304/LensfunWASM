@@ -5,7 +5,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <algorithm>
 #include <sstream>
 #include <string>
 
@@ -100,20 +99,32 @@ const lfLens *resolve_lens(uint32_t lens_handle)
     return nullptr;
 }
 
-int grid_points(int size, int step)
+// Grid flags, the map builders' last argument (0 when a caller passes none).
+// LFW_GRID_COVER_FRAME: the grid covers the frame. Nodes sit every `step`
+// pixels from 0; by default the last is the last one at or before the frame's
+// last pixel, so the last (size - 1) % step columns and rows lie past it and
+// have no node to interpolate towards. With this flag the grid gets one more
+// node there, up to step - 1 pixels past the last pixel, which Lensfun
+// evaluates like any other position: every pixel then lies between nodes.
+constexpr int32_t LFW_GRID_COVER_FRAME = 1;
+
+int grid_points(int size, int step, int32_t grid_flags)
 {
     if (size <= 0 || step <= 0)
     {
         return 0;
     }
+    if (grid_flags & LFW_GRID_COVER_FRAME)
+    {
+        return ((size - 1 + step - 1) / step) + 1;
+    }
     return ((size - 1) / step) + 1;
 }
 
-float sample_coord(int index, int step, int bound)
+// The pixel position of node `index`.
+float sample_coord(int index, int step)
 {
-    const int value = index * step;
-    const int clamped = std::min(value, std::max(bound - 1, 0));
-    return static_cast<float>(clamped);
+    return static_cast<float>(index * step);
 }
 } // namespace
 
@@ -161,7 +172,10 @@ LFW_EXPORT char *lfw_find_lenses_json(
 
     const lfCamera *camera = nullptr;
     const lfCamera **cameras_to_free = nullptr;
-    if (camera_maker || camera_model)
+    // A camera narrows the search to its mount and crop factor, and only a
+    // model names one: for an empty model lf_db_find_cameras returns every
+    // camera (of the maker), and the first of them would stand in for it.
+    if (camera_model && *camera_model)
     {
         cameras_to_free = lf_db_find_cameras(g_db, camera_maker, camera_model);
         if (cameras_to_free)
@@ -257,6 +271,14 @@ LFW_EXPORT char *lfw_find_cameras_json(const char *maker, const char *model, int
     return dup_cstr(out.str());
 }
 
+// The grid flags this core's map builders understand (LFW_GRID_*). A core
+// without this export understands none: it builds the default grid whatever
+// it is passed.
+LFW_EXPORT int32_t lfw_grid_flags(void)
+{
+    return LFW_GRID_COVER_FRAME;
+}
+
 LFW_EXPORT int32_t lfw_available_mods(uint32_t lens_handle, float crop)
 {
     const lfLens *lens = resolve_lens(lens_handle);
@@ -277,7 +299,8 @@ LFW_EXPORT int32_t lfw_build_geometry_map(
     int32_t reverse,
     int32_t step,
     float *out_xy,
-    int32_t out_len)
+    int32_t out_len,
+    int32_t grid_flags)
 {
     const lfLens *lens = resolve_lens(lens_handle);
     if (!lens || !out_xy || width <= 0 || height <= 0 || step <= 0)
@@ -285,8 +308,8 @@ LFW_EXPORT int32_t lfw_build_geometry_map(
         return -1;
     }
 
-    const int gx = grid_points(width, step);
-    const int gy = grid_points(height, step);
+    const int gx = grid_points(width, step, grid_flags);
+    const int gy = grid_points(height, step, grid_flags);
     const int needed = gx * gy * 2;
     if (out_len < needed)
     {
@@ -313,10 +336,10 @@ LFW_EXPORT int32_t lfw_build_geometry_map(
     float result[2] = {0.0f, 0.0f};
     for (int y = 0; y < gy; ++y)
     {
-        const float py = sample_coord(y, step, height);
+        const float py = sample_coord(y, step);
         for (int x = 0; x < gx; ++x)
         {
-            const float px = sample_coord(x, step, width);
+            const float px = sample_coord(x, step);
             if (!lf_modifier_apply_geometry_distortion(modifier, px, py, 1, 1, result))
             {
                 lf_modifier_destroy(modifier);
@@ -340,7 +363,8 @@ LFW_EXPORT int32_t lfw_build_tca_map(
     int32_t reverse,
     int32_t step,
     float *out_rgbxy,
-    int32_t out_len)
+    int32_t out_len,
+    int32_t grid_flags)
 {
     const lfLens *lens = resolve_lens(lens_handle);
     if (!lens || !out_rgbxy || width <= 0 || height <= 0 || step <= 0)
@@ -348,8 +372,8 @@ LFW_EXPORT int32_t lfw_build_tca_map(
         return -1;
     }
 
-    const int gx = grid_points(width, step);
-    const int gy = grid_points(height, step);
+    const int gx = grid_points(width, step, grid_flags);
+    const int gy = grid_points(height, step, grid_flags);
     const int needed = gx * gy * 6;
     if (out_len < needed)
     {
@@ -376,10 +400,10 @@ LFW_EXPORT int32_t lfw_build_tca_map(
     float result[6] = {0};
     for (int y = 0; y < gy; ++y)
     {
-        const float py = sample_coord(y, step, height);
+        const float py = sample_coord(y, step);
         for (int x = 0; x < gx; ++x)
         {
-            const float px = sample_coord(x, step, width);
+            const float px = sample_coord(x, step);
             if (!lf_modifier_apply_subpixel_distortion(modifier, px, py, 1, 1, result))
             {
                 lf_modifier_destroy(modifier);
@@ -396,6 +420,90 @@ LFW_EXPORT int32_t lfw_build_tca_map(
     return 0;
 }
 
+// Distortion and TCA corrected together: Lensfun's stages 2 and 3 in one step
+// (lfModifier::ApplySubpixelGeometryDistortion). Per grid node it gives the
+// source x, y of the red, green and blue samples. Lensfun moves every channel
+// by the distortion correction first, then moves red and blue by the TCA
+// correction at that distorted position. lfw_build_tca_map enables TCA only,
+// so its coordinates carry no distortion. A lens with only one of the two
+// calibrations gets that one (without TCA data every channel gets the
+// geometry map's position).
+// Returns the LF_MODIFY_DISTORTION / LF_MODIFY_TCA flags of the corrections
+// applied (> 0), or a negative code: -1 bad input, -2 buffer too short,
+// -3 no modifier, -4 nothing to apply (no distortion or TCA calibration for
+// this focal length and crop).
+LFW_EXPORT int32_t lfw_build_subpixel_geometry_map(
+    uint32_t lens_handle,
+    float focal,
+    float crop,
+    int32_t width,
+    int32_t height,
+    int32_t reverse,
+    int32_t step,
+    float *out_rgbxy,
+    int32_t out_len,
+    int32_t grid_flags)
+{
+    const lfLens *lens = resolve_lens(lens_handle);
+    if (!lens || !out_rgbxy || width <= 0 || height <= 0 || step <= 0)
+    {
+        return -1;
+    }
+
+    const int gx = grid_points(width, step, grid_flags);
+    const int gy = grid_points(height, step, grid_flags);
+    const int needed = gx * gy * 6;
+    if (out_len < needed)
+    {
+        return -2;
+    }
+
+    lfModifier *modifier = lf_modifier_create(
+        lens,
+        focal,
+        crop,
+        width,
+        height,
+        LF_PF_F32,
+        reverse != 0);
+
+    if (!modifier)
+    {
+        return -3;
+    }
+
+    lf_modifier_enable_distortion_correction(modifier);
+    const int mods = lf_modifier_enable_tca_correction(modifier) & (LF_MODIFY_DISTORTION | LF_MODIFY_TCA);
+    if (mods == 0)
+    {
+        lf_modifier_destroy(modifier);
+        return -4;
+    }
+
+    int cursor = 0;
+    float result[6] = {0};
+    for (int y = 0; y < gy; ++y)
+    {
+        const float py = sample_coord(y, step);
+        for (int x = 0; x < gx; ++x)
+        {
+            const float px = sample_coord(x, step);
+            if (!lf_modifier_apply_subpixel_geometry_distortion(modifier, px, py, 1, 1, result))
+            {
+                lf_modifier_destroy(modifier);
+                return -4;
+            }
+            for (int k = 0; k < 6; ++k)
+            {
+                out_rgbxy[cursor++] = result[k];
+            }
+        }
+    }
+
+    lf_modifier_destroy(modifier);
+    return mods;
+}
+
 LFW_EXPORT int32_t lfw_build_vignetting_map(
     uint32_t lens_handle,
     float focal,
@@ -407,7 +515,8 @@ LFW_EXPORT int32_t lfw_build_vignetting_map(
     int32_t reverse,
     int32_t step,
     float *out_rgb_gain,
-    int32_t out_len)
+    int32_t out_len,
+    int32_t grid_flags)
 {
     const lfLens *lens = resolve_lens(lens_handle);
     if (!lens || !out_rgb_gain || width <= 0 || height <= 0 || step <= 0)
@@ -415,8 +524,8 @@ LFW_EXPORT int32_t lfw_build_vignetting_map(
         return -1;
     }
 
-    const int gx = grid_points(width, step);
-    const int gy = grid_points(height, step);
+    const int gx = grid_points(width, step, grid_flags);
+    const int gy = grid_points(height, step, grid_flags);
     const int needed = gx * gy * 3;
     if (out_len < needed)
     {
@@ -447,10 +556,10 @@ LFW_EXPORT int32_t lfw_build_vignetting_map(
     float pixel[3] = {1.0f, 1.0f, 1.0f};
     for (int y = 0; y < gy; ++y)
     {
-        const float py = sample_coord(y, step, height);
+        const float py = sample_coord(y, step);
         for (int x = 0; x < gx; ++x)
         {
-            const float px = sample_coord(x, step, width);
+            const float px = sample_coord(x, step);
             pixel[0] = 1.0f;
             pixel[1] = 1.0f;
             pixel[2] = 1.0f;

@@ -21,7 +21,8 @@ Compile [Lensfun](https://github.com/lensfun/lensfun) into WebAssembly and expos
 - Build correction maps for:
   - Geometry/distortion
   - TCA (transverse chromatic aberration)
-  - Vignetting
+  - Distortion and TCA together (one per-channel map, in Lensfun's order)
+  - Vignetting (also alone, for lenses without distortion calibration)
 
 The output maps are designed for WebGL/WebGPU/canvas remap pipelines.
 
@@ -44,7 +45,7 @@ The output maps are designed for WebGL/WebGPU/canvas remap pipelines.
 - Node.js 22+
 - npm 10+
 - CMake 3.20+
-- Emscripten (`emcc`, `emcmake` in PATH)
+- Emscripten (`emcc`, `emcmake` in PATH); CI and releases build with 6.0.4
 
 ## Installation
 
@@ -153,6 +154,7 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
 - `includeVignetting?` (default `false`)
 - `aperture?` (required when `includeVignetting = true`)
 - `distance?` (default `1000`)
+- `coverFrame?` (default `false`): a grid that covers the frame (see [Map grids](#map-grids))
 
 `CorrectionMaps`:
 
@@ -163,6 +165,43 @@ Returns bit flags from Lensfun (`LF_MODIFY_*`).
   - Layout: `[rx, ry, gx, gy, bx, by, ...]`
 - `vignetting?: Float32Array` length = `gridW * gridH * 3`
   - Layout: `[rGain, gGain, bGain, ...]`
+
+`tca` is built with TCA correction alone: its coordinates carry no distortion correction. To correct both, use `buildSubpixelGeometryMap`.
+
+`geometry` is always built first: a lens without distortion calibration fails (code `-4`). Its vignetting gains come from `buildVignettingMap`.
+
+### `buildSubpixelGeometryMap(input) => SubpixelGeometryMap`
+
+Distortion and TCA corrected together, as Lensfun applies them in one step (`ApplySubpixelGeometryDistortion`: the distortion correction first, then TCA at the distorted position).
+
+`MapGridInput`: `lensHandle`, `width`, `height`, `focal`, `crop`, `step?`, `reverse?`, `coverFrame?` (as for `buildCorrectionMaps`).
+
+`SubpixelGeometryMap`:
+
+- `gridWidth`, `gridHeight`, `step`
+- `coords: Float32Array` length = `gridW * gridH * 6`
+  - Layout: `[rx, ry, gx, gy, bx, by, ...]`
+- `modifications`: the corrections applied (`LF_MODIFY_DISTORTION`, `LF_MODIFY_TCA`). A lens without TCA calibration gets its distortion correction for all three channels; one with neither calibration throws (code `-4`).
+
+### `buildVignettingMap(input) => VignettingMap`
+
+Vignetting gains alone, without a geometry map: the gains `buildCorrectionMaps` gives as `vignetting` for the same grid. It works for a lens without distortion calibration too.
+
+`VignettingMapInput`: the `MapGridInput` fields, `aperture` (required), `distance?` (default `1000`).
+
+`VignettingMap`:
+
+- `gridWidth`, `gridHeight`, `step`
+- `gains: Float32Array` length = `gridW * gridH * 3`
+  - Layout: `[rGain, gGain, bGain, ...]`
+
+A lens without vignetting calibration for the crop factor throws (code `-4`).
+
+### Map grids
+
+Every map is a grid of nodes, row by row, with a node every `step` pixels from 0 (node `i` at pixel `i * step`). By default it has `floor((size - 1) / step) + 1` nodes per axis, the last at or before the last pixel: the last `(size - 1) % step` columns and rows lie past it, with no node to interpolate towards.
+
+With `coverFrame: true` (every map builder takes it) the grid covers the frame: `ceil((size - 1) / step) + 1` nodes per axis. Where `step` does not divide `width - 1` (`height - 1`) that is one more node, up to `step - 1` pixels past the last pixel, which Lensfun computes like the others. Every pixel then lies between nodes, and sampling the grid bilinearly at `(x / step, y / step)` needs no clamping (a texture of the nodes with linear filtering, for example). The other nodes are the default grid's, value for value. A core before 0.1.4 cannot build this grid: with one, `coverFrame` throws.
 
 ### `dispose()`
 
@@ -258,6 +297,14 @@ Database path or `.data` load is wrong.
 
 - Ensure `dataUrl` points to `lensfun-core.data`
 - Ensure `dbPath` matches preloaded path (`/lensfun-db` by default)
+
+### `the core module exports no HEAPF32 view`
+
+The core (`lensfun-core.js`) is older than the JS API: cores before 0.1.4 do not export `HEAPF32`. Load the core of the same release.
+
+### `the core module builds no grid that covers the frame`
+
+The core (`lensfun-core.js`) is older than the JS API: cores before 0.1.4 build the default grid only. Load the core of the same release, or leave `coverFrame` off.
 
 ### `native map builder failed with code ...`
 

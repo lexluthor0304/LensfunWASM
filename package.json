@@ -38,7 +38,7 @@
   "scripts": {
     "build:wasm": "bash scripts/build-wasm.sh",
     "build:js": "tsup",
-    "build:types": "tsc --emitDeclarationOnly",
+    "build:types": "tsc -p tsconfig.build.json --emitDeclarationOnly",
     "build": "npm run build:wasm && npm run build:js && npm run build:types",
     "test": "vitest run",
     "check": "npm run build:js && npm run build:types && npm run test",

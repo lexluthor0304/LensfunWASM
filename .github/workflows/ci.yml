@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # The Emscripten release the core is built with, pinned: `latest` changes
+  # under the package between releases. 0.1.3 was built by one that puts no
+  # HEAP views on Module unless they are exported, and built no maps.
+  EMSDK_VERSION: '6.0.4'
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -25,10 +31,10 @@ jobs:
 
       - name: Setup Emscripten
         run: |
-          git clone https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
           cd "$RUNNER_TEMP/emsdk"
-          ./emsdk install latest
-          ./emsdk activate latest
+          ./emsdk install "$EMSDK_VERSION"
+          ./emsdk activate "$EMSDK_VERSION"
 
       - name: Build + test
         shell: bash
